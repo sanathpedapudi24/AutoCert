@@ -3,7 +3,6 @@ Infyspringboard Course Auto-Clicker
 Automatically clicks through course slides via the next arrow button.
 """
 
-from jaraco import context
 from playwright.sync_api import sync_playwright
 import time
 import sys
@@ -29,7 +28,8 @@ SELECTORS = [
 def handle_video_if_present(page, slide_num):
     """
     Checks if a video is present on the current slide.
-    If yes, clicks play and waits for it to finish.
+    If yes, clicks the center play button ONCE and waits for it to finish.
+    Never touches the video again after play to avoid accidental pausing.
     Returns True if a video was found and handled, False otherwise.
     """
     try:
@@ -37,43 +37,79 @@ def handle_video_if_present(page, slide_num):
         if not video:
             return False
 
-        # Check if video is paused
-        is_paused = page.evaluate("() => { const v = document.querySelector('video'); return v ? v.paused : true; }")
+        # Check if video is already playing — if so, just wait
+        is_paused = page.evaluate("""() => {
+            const v = document.querySelector('video');
+            return v ? v.paused : true;
+        }""")
 
         if is_paused:
-            print(f"🎬 Slide {slide_num}: Video detected, clicking play...")
-            # Try clicking the play button overlay first, then the video itself
-            play_btn = page.query_selector(".play-button, [aria-label='Play'], button.vjs-play-control, .ytp-play-button")
-            if play_btn and play_btn.is_visible():
-                play_btn.click()
-            else:
-                video.click()  # Click the video itself to play
-            time.sleep(1)
+            print(f"🎬 Slide {slide_num}: Video detected, clicking play button...")
 
-        # Wait for video to finish
+            clicked = False
+
+            # 1. Try known overlay play button selectors (never touches video element)
+            overlay_selectors = [
+                ".play-icon",
+                ".play-btn",
+                ".play-button",
+                "[class*='play-icon']",
+                "[class*='play-btn']",
+                "[class*='playButton']",
+                "[class*='play_button']",
+                "[aria-label='Play']",
+                "button.vjs-play-control",
+                ".ytp-play-button",
+            ]
+            for sel in overlay_selectors:
+                try:
+                    btn = page.query_selector(sel)
+                    if btn and btn.is_visible():
+                        btn.click()
+                        clicked = True
+                        print(f"  ▶ Clicked overlay play button ({sel})")
+                        break
+                except:
+                    pass
+
+            # 2. If no overlay found, use JS to call video.play() directly
+            #    This avoids any mouse click that could accidentally pause
+            if not clicked:
+                print(f"  ▶ No overlay found, using JS to call video.play()...")
+                page.evaluate("() => { const v = document.querySelector('video'); if(v) v.play(); }")
+
+            time.sleep(2)  # give it a moment to start
+
+        # Now just wait for video to finish — DO NOT touch the video again
         print(f"⏳ Slide {slide_num}: Waiting for video to finish...")
-        timeout = 3600  # max 1 hour wait
+        timeout = 3600  # max 1 hour
         elapsed = 0
-        check_interval = 3  # check every 3 seconds
+        check_interval = 3
 
         while elapsed < timeout:
             time.sleep(check_interval)
             elapsed += check_interval
-            ended = page.evaluate("""() => {
-                const v = document.querySelector('video');
-                if (!v) return true;
-                return v.ended || (v.paused && v.currentTime > 0 && v.currentTime >= v.duration - 1);
-            }""")
-            current = page.evaluate("() => { const v = document.querySelector('video'); return v ? Math.floor(v.currentTime) : 0; }")
-            duration = page.evaluate("() => { const v = document.querySelector('video'); return v ? Math.floor(v.duration) : 0; }")
-            print(f"  ▶ {current}s / {duration}s", end="\r")
 
-            if ended:
-                print(f"\n✅ Slide {slide_num}: Video finished ({duration}s)")
-                time.sleep(1)  # brief pause before next click
+            state = page.evaluate("""() => {
+                const v = document.querySelector('video');
+                if (!v) return {ended: true, current: 0, duration: 0};
+                return {
+                    ended: v.ended || (v.paused && v.currentTime > 0 && v.currentTime >= v.duration - 1),
+                    current: Math.floor(v.currentTime),
+                    duration: Math.floor(v.duration) || 0
+                };
+            }""")
+
+            current = state['current']
+            duration = state['duration']
+            print(f"  ▶ {current}s / {duration}s        ", end="\r")
+
+            if state['ended']:
+                print(f"\n✅ Slide {slide_num}: Video finished! ({duration}s total)")
+                time.sleep(1)
                 return True
 
-        print(f"\n⚠️  Slide {slide_num}: Video wait timed out, proceeding anyway.")
+        print(f"\n⚠️  Slide {slide_num}: Video timed out, proceeding anyway.")
         return True
 
     except Exception as e:
@@ -148,18 +184,23 @@ def main():
     print()
     
     with sync_playwright() as p:
-        # Launch browser using existing user data with login info
-        import os
+        # Connect to already-running Chromium (launched with --remote-debugging-port=9222)
+        print("🔌 Connecting to your existing Chromium browser...")
         browser = p.chromium.connect_over_cdp("http://localhost:9222")
         context = browser.contexts[0]
-        page = context.pages[0]  # use your existing tab
-        
-        # Open the URL
-        page.goto(URL)
-        
-        print("📱 Browser opened. Please LOG IN and navigate to your course module.")
-        print("⏳ Press ENTER in this terminal when ready to start auto-clicking...\n")
-        
+
+        # Find the Infyspringboard tab or use first available
+        page = None
+        for pg in context.pages:
+            if "infyspringboard" in pg.url:
+                page = pg
+                break
+        if not page:
+            page = context.pages[0]
+
+        print(f"✅ Connected! Active tab: {page.url[:80]}")
+        print("⏳ Navigate to your course module, then press ENTER here...\n")
+
         # Wait for user to press Enter
         input()
         
@@ -212,9 +253,9 @@ def main():
             print(f"📊 Total slides clicked: {slide_count - 1}")
             print("=" * 60)
             
-            # Close browser
-            context.close()
-            print("✓ Browser closed. Script ended.\n")
+            # Disconnect (don't close the user's browser)
+            browser.close()
+            print("✓ Script disconnected from browser.\n")
 
 
 if __name__ == "__main__":
