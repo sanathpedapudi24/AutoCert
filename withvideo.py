@@ -3,6 +3,8 @@ Infyspringboard Course Auto-Clicker
 Automatically clicks through course slides via the next arrow button.
 """
 
+from multiprocessing import context
+
 from playwright.sync_api import sync_playwright
 import time
 import sys
@@ -174,89 +176,58 @@ def debug_dump_buttons(page):
 
 
 def main():
-    """Main execution function."""
     print("=" * 60)
     print("Infyspringboard Course Auto-Clicker")
     print("=" * 60)
     print(f"Opening: {URL}")
     print(f"Delay between clicks: {DELAY} seconds")
-    print(f"Total selectors to try: {len(SELECTORS)}")
     print()
-    
+
     with sync_playwright() as p:
-        # Connect to already-running Chromium (launched with --remote-debugging-port=9222)
-        print("🔌 Connecting to your existing Chromium browser...")
-        browser = p.chromium.connect_over_cdp("http://localhost:9222")
+        print("🔌 Connecting to Chrome (CDP mode)...")
+
+        # ✅ Connect to existing Chrome (IMPORTANT)
+        browser = p.chromium.connect_over_cdp("http://127.0.0.1:9222")
+
         context = browser.contexts[0]
 
-        # Find the Infyspringboard tab or use first available
+        # Get existing page (already logged in)
         page = None
         for pg in context.pages:
             if "infyspringboard" in pg.url:
                 page = pg
                 break
+
         if not page:
             page = context.pages[0]
 
-        print(f"✅ Connected! Active tab: {page.url[:80]}")
-        print("⏳ Navigate to your course module, then press ENTER here...\n")
+        print(f"✅ Connected! Current page: {page.url}")
+        print("⏳ Open your course manually, then press ENTER...\n")
 
-        # Wait for user to press Enter
         input()
-        
-        print("🚀 Starting auto-click sequence...\n")
-        
+
+        print("🚀 Starting auto-click...\n")
+
         slide_count = 0
-        consecutive_misses = 0
-        max_consecutive_misses = 5
-        
+
         try:
             while True:
-                # Wait for the configured delay
                 time.sleep(DELAY)
-                
                 slide_count += 1
 
-                # Handle video if present on this slide
                 handle_video_if_present(page, slide_count)
 
-                # Try to find and click the next arrow
                 success = find_and_click_arrow(page, slide_count)
-                
-                if success:
-                    # Reset consecutive miss counter on successful click
-                    consecutive_misses = 0
-                else:
-                    # Increment miss counter
-                    consecutive_misses += 1
-                    print(f"✗ Slide {slide_count}: Arrow not found ({consecutive_misses}/{max_consecutive_misses})")
-                    
-                    # Check if we've hit the threshold for missing the arrow
-                    if consecutive_misses >= max_consecutive_misses:
-                        print()
-                        print("⚠️  Arrow button not found 5 times in a row!")
-                        response = input("Continue trying? (y/n): ").strip().lower()
-                        
-                        if response != 'y':
-                            print("\n🛑 User chose to quit.")
-                            break
-                        else:
-                            print("✓ Continuing...\n")
-                            consecutive_misses = 0  # Reset counter
-        
-        except KeyboardInterrupt:
-            print(f"\n\n⏹️  Interrupted by user (Ctrl+C)")
-        
-        finally:
-            # Cleanup and summary
-            print("\n" + "=" * 60)
-            print(f"📊 Total slides clicked: {slide_count - 1}")
-            print("=" * 60)
-            
-            # Disconnect (don't close the user's browser)
-            browser.close()
-            print("✓ Script disconnected from browser.\n")
 
+                if not success:
+                    print(f"❌ Slide {slide_count}: Next button not found")
+
+        except KeyboardInterrupt:
+            print("\n⏹️ Stopped by user")
+
+        finally:
+            print(f"\n📊 Total slides: {slide_count}")
+            browser.close()
 
 if __name__ == "__main__":
     main()
