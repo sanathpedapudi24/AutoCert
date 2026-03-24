@@ -13,13 +13,15 @@ URL = "https://infyspringboard.onwingspan.com"
 
 # Selectors to try in order
 SELECTORS = [
+    "[aria-label='next content']",       # Primary - confirmed working
+    ".navigation-btn-frwd",              # Class-based fallback
+    "button:has-text('arrow_forward_ios')",
     "button.next-btn",
     "[aria-label='Next']",
     "[aria-label='next']",
     ".right-arrow",
     ".navigate-right",
     ".slide-nav-right",
-    "button:has-text('Next')",
     ".content-nav button:last-child",
 ]
 
@@ -62,6 +64,23 @@ def find_and_click_arrow(page, slide_num):
     return False
 
 
+def debug_dump_buttons(page):
+    """Prints all buttons and clickable elements found on the page."""
+    print("\n🔍 DEBUG: Scanning all buttons and clickable elements...\n")
+    elements = page.query_selector_all("button, [role='button'], a, [class*='arrow'], [class*='next'], [class*='nav']")
+    for el in elements:
+        try:
+            tag = el.evaluate("e => e.tagName")
+            text = el.inner_text().strip()[:40]
+            classes = el.get_attribute("class") or ""
+            aria = el.get_attribute("aria-label") or ""
+            visible = el.is_visible()
+            print(f"  [{tag}] text='{text}' class='{classes[:60]}' aria='{aria}' visible={visible}")
+        except:
+            pass
+    print("\n🔍 DEBUG DONE\n")
+
+
 def main():
     """Main execution function."""
     print("=" * 60)
@@ -73,9 +92,15 @@ def main():
     print()
     
     with sync_playwright() as p:
-        # Launch browser (headless=False for visible window)
-        browser = p.chromium.launch(headless=False)
-        page = browser.new_page()
+        # Launch browser using existing user data with login info
+        import os
+        user_data_dir = os.path.expanduser("~/.config/chromium")
+        context = p.chromium.launch_persistent_context(
+            user_data_dir,
+            headless=False,
+            slow_mo=200
+        )
+        page = context.new_page()
         
         # Open the URL
         page.goto(URL)
@@ -87,6 +112,7 @@ def main():
         input()
         
         print("🚀 Starting auto-click sequence...\n")
+        debug_dump_buttons(page)
         
         slide_count = 0
         consecutive_misses = 0
@@ -133,7 +159,7 @@ def main():
             print("=" * 60)
             
             # Close browser
-            browser.close()
+            context.close()
             print("✓ Browser closed. Script ended.\n")
 
 
